@@ -5,10 +5,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   library(ggplot2)
   library(Rsamtools)
   
-  # ==========================================================================
-  # INNER FUNCTION: Bisulfite-aware allele assignment
-  # ==========================================================================
-  
   assign_allele_bisulfite <- function(snp_base, ref_al, alt_al, strand_label, flag, md_tag) {
     
     allele_type     <- NA_character_
@@ -153,10 +149,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
     return(list(allele_type = allele_type, na_allele = na_allele, assignment_note = assignment_note))
   }
   
-  # ==========================================================================
-  # INNER FUNCTION: SNP/CpG summary table
-  # ==========================================================================
-  
   make_snp_cpg_table <- function(dt) {
     result <- dt[, {
       ref_idx   <- !is.na(allele_type) & allele_type == "REF"
@@ -185,9 +177,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
     return(result)
   }
   
-  # ==========================================================================
-  # INNER FUNCTION: CpG methylation summary table
-  # ==========================================================================
   
   make_meth_summary <- function(dt) {
     dt2 <- dt[!allele_type %in% c("NA", "?") & !is.na(allele_type)]
@@ -209,11 +198,7 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
     result[, allele_order := NULL]
     return(result)
   }
-  
-  # ==========================================================================
-  # INNER FUNCTION: Line plot PDF per DMR
-  # ==========================================================================
-  
+ 
   make_lineplot_pdf <- function(snp_cpg_dt, pdf_file) {
     cat("Generating DMR line plots:", pdf_file, "\n")
     
@@ -300,10 +285,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
     cat("  PDF written:", pdf_file, "\n\n")
   }
   
-  # ==========================================================================
-  # LOAD INPUTS
-  # ==========================================================================
-  
   cat("Loading CpG/SNP reference file:", cpg_snp_file, "\n")
   if (!file.exists(cpg_snp_file)) stop("CpG/SNP file not found: ", cpg_snp_file)
   cpg_snp_data <- as.data.table(read_xlsx(cpg_snp_file))
@@ -314,10 +295,7 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   processed_data <- as.data.table(read_xlsx(filter_cpgs_file))
   cat("  Rows:", nrow(processed_data), "\n")
   
-  # ==========================================================================
-  # BUILD CpG VARIATION LOOKUP
-  # ==========================================================================
-  
+
   cat("Building CpG variation lookup...\n")
   cpg_ref_raw <- as.data.table(read_xlsx(filter_cpgs_file))
   sample_cols <- grep("^(Control|Patient)_", names(cpg_ref_raw), value = TRUE)
@@ -353,9 +331,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   print(cpg_var_lookup[!is.na(Category), .N, by = Category][order(Category)])
   cat("\n")
   
-  # ==========================================================================
-  # ← UPDATED: LOAD BAM DIRECTLY via scanBam()
-  # ==========================================================================
   
   cat("Loading BAM file:", sam_file, "\n")
   if (!file.exists(sam_file)) stop("BAM file not found: ", sam_file)
@@ -378,11 +353,10 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
     yd_tag     = sapply(bam_scan$tag$YD, function(x) if (is.null(x)) NA_character_ else as.character(x))
   )
   
-  # Keep only relevant flags
   sam_dt <- sam_dt[flag %in% c(99L, 147L, 83L, 163L)]
   cat("  Total reads loaded:", nrow(sam_dt), "\n\n")
   
-  # ← UPDATED: sample_id from BAM filename (strips .bam and _all_wide suffix)
+ 
   sample_id <- sub("_all_wide$", "", tools::file_path_sans_ext(basename(sam_file)))
   
   target_cpgs <- data.table(
@@ -393,10 +367,7 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   ref_chrs    <- unique(cpg_snp_data$chr)
   result_list <- vector("list", nrow(sam_dt) * 5L)
   list_idx    <- 1L
-  
-  # ==========================================================================
-  # ← UPDATED: MAIN LOOP — iterates over sam_dt rows instead of SAM lines
-  # ==========================================================================
+
   
   cat("Processing BAM reads...\n")
   
@@ -520,10 +491,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   final_results <- rbindlist(result_list[1:(list_idx - 1L)])
   final_results <- final_results[cpg_pos != snp_pos]
   
-  # ==========================================================================
-  # FILTER: cpg_pos where REF < 20 OR ALT < 20
-  # ==========================================================================
-  
   cat("Filtering CpG positions: removing those with REF < 20 or ALT < 20 reads...\n")
   
   cpg_counts <- final_results[
@@ -546,11 +513,7 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   cat("  CpG positions before filter:", n_before, "\n")
   cat("  CpG positions after filter: ", n_after,  "\n")
   cat("  CpG positions removed:      ", n_before - n_after, "\n\n")
-  
-  # ==========================================================================
-  # POST-PROCESSING: Alignment padding
-  # ==========================================================================
-  
+
   cat("Computing per-SNP alignment padding...\n")
   snp_groups <- final_results[,
                               .(min_read_start_per_snp = min(read_start, na.rm = TRUE)),
@@ -564,10 +527,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   final_results[, Padded_Sequence := paste0(strrep("*", padding_amount), marked_sequence)]
   final_results[, c("marked_sequence", "min_read_start_per_snp", "padding_amount") := NULL]
   
-  # ==========================================================================
-  # SORTING
-  # ==========================================================================
-  
   final_results[, allele_order := fcase(
     allele_type == "REF", 1L,
     allele_type == "ALT", 2L,
@@ -576,19 +535,12 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   setorder(final_results, DMR, read_start, snp_pos, cpg_pos, allele_order)
   final_results[, allele_order := NULL]
   
-  # ==========================================================================
-  # SUMMARY TABLES
-  # ==========================================================================
-  
   cat("Building SNP/CpG summary table...\n")
   snp_cpg_table <- make_snp_cpg_table(final_results)
   
   cat("Building methylation summary table...\n")
   meth_summary_table <- make_meth_summary(final_results)
-  
-  # ==========================================================================
-  # SUMMARY STATISTICS
-  # ==========================================================================
+
   
   cat("SUMMARY STATISTICS\n")
   cat("  Total rows:",           nrow(final_results), "\n")
@@ -601,10 +553,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   print(final_results[, .N, by = DMR][order(-N)])
   cat("\n")
   
-  # ==========================================================================
-  # JOIN variation info into all output tables
-  # ==========================================================================
-  
   cat("Joining CpG variation info into output tables...\n")
   join_var <- function(dt) {
     merge(dt, cpg_var_lookup, by = c("cpg_pos", "DMR"), all.x = TRUE, sort = FALSE)
@@ -613,10 +561,6 @@ ASM <- function(cpg_snp_file, sam_file, filter_cpgs_file, output_file = NULL) {
   snp_cpg_table      <- join_var(snp_cpg_table)
   meth_summary_table <- join_var(meth_summary_table)
   cat("  Done.\n\n")
-  
-  # ==========================================================================
-  # WRITE OUTPUTS
-  # ==========================================================================
   
   if (is.null(output_file)) output_file <- paste0("asm_", sample_id, ".xlsx")
   snp_cpg_file  <- paste0("snp_cpg_",      sample_id, ".xlsx")
