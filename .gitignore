@@ -1,0 +1,8 @@
+# large data and outputs
+input/*.bam
+input/*.bam.bai
+input/*.CGmeth.txt
+input/*.SNPs.out
+
+asm_results/
+bam_asm/
