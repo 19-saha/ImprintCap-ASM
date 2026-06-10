@@ -1,19 +1,35 @@
+#' Prepare CpG–SNP Input Table
+#'
+#' @param snp_file      Path to a VCF file (ending in _all.SNPs.out)
+#' @param meth_file     Path to the bismark/gemBS methylation table
+#' @param cpg_ref_file  Path to the CpG panel reference Excel file
+#' @param output_file   Optional path for the output .xlsx; auto-named if NULL
+#' @param min_depth     Minimum total SNP read depth (default 20)
+#' @param window_bp     Window in bp around each SNP (default 60)
+#' @param sample_type   Either "control" or "patient"
+#'
+#' @return A data.table of CpG–SNP pairs (invisibly)
+#' @export
 prepare_cpg_snp_input <- function(snp_file,
                                   meth_file,
                                   cpg_ref_file,
                                   output_file = NULL,
                                   min_depth   = 20L,
-                                  window_bp   = 60L) {
+                                  window_bp   = 60L,
+                                  sample_type = c("control", "patient")) {
+
   library(data.table)
   library(vcfR)
   library(readxl)
-  
-  sample_id <- sub("_all\\.SNPs\\.out$", "", basename(snp_file))
-  cat("Processing sample:", sample_id, "\n")
-  
+  library(writexl)
+
+  sample_type <- match.arg(sample_type)
+  sample_id   <- sub("_all\\.SNPs\\.out$", "", basename(snp_file))
+  cat("Processing sample:", sample_id, "[", sample_type, "]\n")
+
   cat("  Loading CpG reference:", cpg_ref_file, "\n")
   cpg_ref <- as.data.table(read_xlsx(cpg_ref_file))
-  
+
   if ("5_location" %in% names(cpg_ref)) {
     cpg_intervals <- cpg_ref[, .(
       chr   = chr,
@@ -36,7 +52,7 @@ prepare_cpg_snp_input <- function(snp_file,
   gt_data <- extract.gt(vr, element = "GT", return.alleles = FALSE)
   ad_data <- extract.gt(vr, element = "AD", return.alleles = FALSE)
   dp_data <- extract.gt(vr, element = "DP", return.alleles = FALSE)
-  
+
   snps <- data.table(
     chr       = vr@fix[, "CHROM"],
     pos       = as.integer(vr@fix[, "POS"]),
@@ -46,7 +62,7 @@ prepare_cpg_snp_input <- function(snp_file,
     AD        = if (!is.null(ad_data)) ad_data[, 1] else NA_character_,
     DP        = if (!is.null(dp_data)) as.integer(dp_data[, 1]) else NA_integer_
   )
-  
+
   snps[, `:=`(
     ref_depth = as.integer(sapply(strsplit(AD, ","), `[`, 1)),
     alt_depth = as.integer(sapply(strsplit(AD, ","), `[`, 2))
@@ -54,21 +70,21 @@ prepare_cpg_snp_input <- function(snp_file,
   snps[, total_depth := ref_depth + alt_depth]
   snps <- snps[GT == "0/1" & !is.na(total_depth) & total_depth >= min_depth]
   cat("  Heterozygous SNPs (depth >=", min_depth, "):", nrow(snps), "\n")
-  
+
   snp_intervals <- snps[, .(
     chr, start = pos, end = pos,
     REF, ALT, GT, AD, DP,
     ref_depth, alt_depth, total_depth
   )]
   setkey(snp_intervals, chr, start, end)
-  
+
   cpg_with_snps <- foverlaps(
     snp_intervals, cpg_intervals,
     by.x = c("chr", "start", "end"),
     by.y = c("chr", "start", "end"),
     type = "any", nomatch = NULL
   )
-  
+
   cpg_with_snps[, `:=`(
     snp_pos = i.start,
     start   = NULL,
@@ -79,7 +95,7 @@ prepare_cpg_snp_input <- function(snp_file,
   cpg_with_snps[, sample_id := sample_id]
   cpg_with_snps <- unique(cpg_with_snps, by = c("chr", "snp_pos", "DMR", "sample_id"))
   cat("  Unique SNP×DMR pairs:", nrow(cpg_with_snps), "\n")
-  
+
   cat("  Loading methylation file:", meth_file, "\n")
   meth <- fread(meth_file)
   setnames(meth,
@@ -102,35 +118,35 @@ prepare_cpg_snp_input <- function(snp_file,
   meth <- meth[context == "CG",
                .(chr, pos, context, total_meth, total_cov, meth_frac)]
   setkey(meth, chr, pos)
-  
+
   if ("5_location" %in% names(cpg_ref)) {
     cpg_ref_positions <- cpg_ref[, .(
       chr,
-      cpg_pos = `5_location` + 1L,   
+      cpg_pos = `5_location` + 1L,
       DMR
     )]
   } else {
     cpg_ref_positions <- cpg_ref[, .(chr, cpg_pos = start + 1L, DMR)]
   }
   setkey(cpg_ref_positions, chr, cpg_pos)
-  
+
   cat("  Panel CpG positions loaded:", nrow(cpg_ref_positions), "\n")
   cat("  cpg_ref pos (+1L):", head(cpg_ref_positions$cpg_pos, 4), "\n")
   cat("  meth pos   (raw): ", head(meth[chr == cpg_ref_positions$chr[1], pos], 4), "\n")
-  
+
   cpg_with_snps[, `:=`(
     win_start = snp_pos - window_bp,
     win_end   = snp_pos + window_bp
   )]
-  
+
   result <- cpg_ref_positions[cpg_with_snps,
                               on = .(chr, cpg_pos >= win_start, cpg_pos <= win_end),
                               nomatch = NULL,
                               allow.cartesian = TRUE,
                               .(chr,
-                                pos         = x.cpg_pos,   
+                                pos         = x.cpg_pos,
                                 ref_DMR     = x.DMR,
-                                snp_pos     = i.snp_pos,   
+                                snp_pos     = i.snp_pos,
                                 DMR         = i.DMR,
                                 sample_id   = i.sample_id,
                                 REF         = i.REF,
@@ -142,19 +158,18 @@ prepare_cpg_snp_input <- function(snp_file,
                                 total_depth = i.total_depth
                               )
   ]
-  
+
   result <- result[ref_DMR == DMR]
   result[, ref_DMR := NULL]
   cat("  SNP×panel-CpG pairs found:", nrow(result), "\n")
-  
-  
+
   result <- meth[result, on = .(chr, pos), nomatch = NULL]
   result <- result[pos != snp_pos]
   result <- unique(result)
-  
+
   cpg_with_snps[, c("win_start", "win_end") := NULL]
   cat("  Final SNP+CpG rows:", nrow(result), "\n")
-  
+
   bed <- unique(result[, .(
     chr,
     start = snp_pos - window_bp - 1L,
@@ -162,17 +177,17 @@ prepare_cpg_snp_input <- function(snp_file,
   )])
   bed_file <- sub("\\.xlsx$", ".bed",
                   ifelse(is.null(output_file),
-                         paste0("cpg_snps_CG_", sample_id, ".xlsx"),
+                         paste0("cpg_snps_CG_", sample_type, "_", sample_id, ".xlsx"),
                          output_file))
   write.table(bed, file = bed_file, sep = "\t",
               row.names = FALSE, col.names = FALSE, quote = FALSE)
   cat("  BED file written:", bed_file, "\n")
-  
+
   if (is.null(output_file))
-    output_file <- paste0("cpg_snps_CG_", sample_id, ".xlsx")
-  
+    output_file <- paste0("cpg_snps_CG_", sample_type, "_", sample_id, ".xlsx")
+
   writexl::write_xlsx(as.data.frame(result), output_file)
   cat("  Excel written:", output_file, "\n\n")
-  
+
   return(invisible(result))
 }
