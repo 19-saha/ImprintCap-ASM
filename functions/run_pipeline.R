@@ -95,7 +95,7 @@ run_sample <- function(sample_id) {
   setwd(results_dir)
   on.exit(setwd(old_wd), add = TRUE)
 
-  ImprintCap_ASM(
+  ASM(
     cpg_snp_file     = normalizePath(cpg_snp_xlsx),
     sam_file         = normalizePath(wide_bam),
     filter_cpgs_file = normalizePath(filter_cpgs_file),
